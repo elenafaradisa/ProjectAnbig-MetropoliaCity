@@ -1,0 +1,16 @@
+# data (large, never commit)
+data/raw/*
+!data/raw/.gitkeep
+data/parquet/
+data/run_stats/
+
+# secrets and local config
+.env
+
+# airflow / python
+airflow/logs/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/

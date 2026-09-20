@@ -1,0 +1,7 @@
+# For running/testing the Spark jobs locally, outside Docker (e.g. `pytest spark/tests/`).
+# The Airflow container installs these itself via docker/airflow/Dockerfile;
+# this file is only for a teammate's own machine.
+pyspark==3.5.1
+pytest==9.1.1
+pyyaml
+pandas>=2.0

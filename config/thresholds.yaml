@@ -1,0 +1,20 @@
+# Placeholder thresholds for later stages (dashboard alert banner, V2X status).
+# These are NOT derived from the data yet — fill them in from the audit
+# notebook results (e.g. percentiles of v2x_packet_loss_rate / delay) before
+# the dashboard uses them, and document the reasoning in docs/keterbatasan.md.
+v2x_status:
+  packet_loss_pct:
+    normal_max: null      # TODO: set from p50/p90 of core.observations.v2x_packet_loss_rate
+    waspada_max: null
+  message_delay_ms:
+    normal_max: null
+    waspada_max: null
+
+alert_levels:
+  kritis:
+    incident_types: [2, 4]   # Major accident, Road blockage
+  waspada:
+    anomaly_rate_zscore_min: 2.0   # area anomaly rate vs same hour-of-week historical mean
+  perhatian:
+    weather_conditions: ["Rain", "Snow"]
+    road_surface_status: ["Wet"]

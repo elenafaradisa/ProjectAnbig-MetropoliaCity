@@ -1,0 +1,19 @@
+# Official label mapping (from the dataset's documentation, confirmed by the user).
+# anomaly_label: 0 = normal, 1 = anomalous (an incident occurred)
+# incident_type is only meaningful where anomaly_label = 1; incident_type = 0 means normal.
+incident_types:
+  0:
+    name: "Normal"
+    contact: null
+  1:
+    name: "Minor collision"
+    contact: "Patrol / administrative handling"
+  2:
+    name: "Major accident"
+    contact: "Ambulance and police"
+  3:
+    name: "Signal disruption"
+    contact: "V2X / signal technician"
+  4:
+    name: "Road blockage"
+    contact: "Tow / clearance crew"
