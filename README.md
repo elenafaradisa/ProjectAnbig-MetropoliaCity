@@ -156,17 +156,20 @@ Optional GUI alternative to `docker compose exec postgres psql ...`.
    is expected).
 
 ## Repo layout
-airflow/dags/dag_etl_traffic.py ingest -> transform_load -> quality_checks
-spark/jobs/ the three ETL jobs (Extract, Transform+Load, quality)
-spark/common/ shared schema, Spark session, Postgres helpers
-spark/tests/ pytest unit tests (no Postgres needed)
-sql/schemas/ Postgres DDL (core, mart, meta tables/views), run automatically on first docker compose up
-sql/mart/ mart-table build scripts (plain SQL, rerun manually after ETL)
-notebooks/ road_gps_stability.py, populate_road_positions.py, 01_audit_data.ipynb (run locally, not in Docker)
-config/ incident_types.yaml, thresholds.yaml
-docs/keterbatasan.md data & pipeline limitations, audit findings
-data/README.md where to get the dataset, known data-quality issues
-docker/airflow/Dockerfile Airflow + Java + PySpark + Postgres JDBC driver
+
+```
+airflow/dags/dag_etl_traffic.py    ingest -> transform_load -> quality_checks
+spark/jobs/                         the three ETL jobs (Extract, Transform+Load, quality)
+spark/common/                       shared schema, Spark session, Postgres helpers
+spark/tests/                        pytest unit tests (no Postgres needed)
+sql/schemas/                        Postgres DDL (core, mart, meta tables/views), run automatically on first `docker compose up`
+sql/mart/                           mart-table build scripts (plain SQL, rerun manually after ETL)
+notebooks/                          road_gps_stability.py, populate_road_positions.py, 01_audit_data.ipynb (run locally, not in Docker)
+config/                             incident_types.yaml, thresholds.yaml
+docs/keterbatasan.md                data & pipeline limitations, audit findings
+data/README.md                      where to get the dataset, known data-quality issues
+docker/airflow/Dockerfile           Airflow + Java + PySpark + Postgres JDBC driver
+```
 
 
 ## Running tests locally (without Docker)
