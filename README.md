@@ -157,7 +157,6 @@ Optional GUI alternative to `docker compose exec postgres psql ...`.
 
 ## Repo layout
 
-## Repo layout
 
 ```
 .
