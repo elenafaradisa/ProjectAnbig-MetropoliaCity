@@ -23,6 +23,7 @@ import os
 
 import pandas as pd
 import psycopg2
+import pathlib
 
 # Rough conversion: degrees -> meters, good enough for a sanity check (not
 # for the actual road_positions values, which should use PostGIS or a
@@ -82,7 +83,9 @@ def run() -> pd.DataFrame:
 
 if __name__ == "__main__":
     result = run()
+    output_path = pathlib.Path(__file__).parent / "road_gps_stability_output.csv"
     result.sort_values("radius_p90_m", ascending=False).to_csv(
-        "notebooks/road_gps_stability_output.csv", index=False
+        output_path, index=False
     )
-    print("\nFull per-segment table written to notebooks/road_gps_stability_output.csv")
+    print(f"\nFull per-segment table written to {output_path}")
+
