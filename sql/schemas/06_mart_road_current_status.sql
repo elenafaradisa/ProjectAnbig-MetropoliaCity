@@ -18,6 +18,13 @@ SELECT DISTINCT ON (road_segment_id)
     anomaly_rate,
     max_incident_type,
     avg_v2x_packet_loss_rate,
-    avg_v2x_message_delay_avg
+    avg_v2x_message_delay_avg,
+    any_bad_weather,
+    any_wet_surface,
+    CASE
+        WHEN max_incident_type IN (2, 4) THEN 'kritis'
+        WHEN any_bad_weather OR any_wet_surface THEN 'perhatian'
+        ELSE 'normal'
+    END AS alert_level
 FROM mart.road_hourly_stats
 ORDER BY road_segment_id, obs_date DESC, obs_hour DESC;

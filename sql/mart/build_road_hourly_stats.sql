@@ -6,7 +6,8 @@ INSERT INTO mart.road_hourly_stats (
     road_segment_id, obs_date, obs_hour, n_observations,
     avg_vehicle_count, avg_average_speed, avg_lane_occupancy_rate,
     avg_jam_density_index, incident_count, anomaly_rate, max_incident_type,
-    avg_v2x_packet_loss_rate, avg_v2x_message_delay_avg
+    avg_v2x_packet_loss_rate, avg_v2x_message_delay_avg, 
+    any_bad_weather, any_wet_surface
 )
 SELECT
     road_segment_id,
@@ -21,6 +22,8 @@ SELECT
     avg(anomaly_label::int)                       AS anomaly_rate,
     max(incident_type)                            AS max_incident_type,
     avg(v2x_packet_loss_rate)                     AS avg_v2x_packet_loss_rate,
-    avg(v2x_message_delay_avg)                    AS avg_v2x_message_delay_avg
+    avg(v2x_message_delay_avg)                    AS avg_v2x_message_delay_avg,
+    bool_or(weather_condition in ('Rain', 'Snow'))  AS any_bad_weather,
+    bool_or(road_surface_status = 'Wet')            AS any_wet_surface
 FROM core.observations
 GROUP BY road_segment_id, obs_date, obs_hour;

@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS mart.road_hourly_stats (
     max_incident_type             SMALLINT         NOT NULL,
     avg_v2x_packet_loss_rate     DOUBLE PRECISION,
     avg_v2x_message_delay_avg    DOUBLE PRECISION,
+    any_bad_weather               BOOLEAN          NOT NULL,
+    any_wet_surface                BOOLEAN          NOT NULL,
     PRIMARY KEY (road_segment_id, obs_date, obs_hour)
 );
 
