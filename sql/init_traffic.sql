@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS traffic_features (
+    hour TIMESTAMP NOT NULL,
+    road_segment_id INTEGER NOT NULL,
+    avg_speed FLOAT,
+    avg_jam_density FLOAT,
+    avg_occupancy FLOAT,
+    total_incidents INTEGER,
+    total_hard_braking INTEGER,
+    aqi INTEGER,
+    pm2_5 FLOAT,
+    pm10 FLOAT,
+    temperature FLOAT,
+    wind_speed FLOAT,
+    hour_of_day INTEGER,
+    day_of_week INTEGER,
+    is_weekend BOOLEAN,
+    incident_flag BOOLEAN,
+    target_jam_next_hour FLOAT,
+    PRIMARY KEY (hour, road_segment_id)
+);

@@ -1,0 +1,82 @@
+x-airflow-common: &airflow-common
+  build: .
+  image: airflow-pyspark-openpyxl:local
+  environment:
+    - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    - AIRFLOW__CORE__DEFAULT_TIMEZONE=Asia/Jakarta
+    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-meta-db/airflow
+    - AIRFLOW__CORE__FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./scripts:/opt/airflow/scripts
+    - ./data:/opt/airflow/data
+    - ./sql:/opt/airflow/sql
+  depends_on:
+    airflow-meta-db:
+      condition: service_healthy
+
+services:
+  target-postgres:
+    image: postgres:15
+    container_name: target-postgres
+    environment:
+      POSTGRES_DB: traffic_warehouse
+      POSTGRES_USER: de_user
+      POSTGRES_PASSWORD: password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_traffic_data:/var/lib/postgresql/data
+      - ./sql/init_traffic.sql:/docker-entrypoint-initdb.d/init_traffic.sql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "de_user", "-d", "traffic_warehouse"]
+      interval: 10s
+      retries: 5
+
+  airflow-meta-db:
+    image: postgres:15
+    container_name: airflow-meta-db
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+    volumes:
+      - airflow_metadata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db init &&
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      retries: 5
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    restart: always
+
+volumes:
+  postgres_traffic_data:
+  airflow_metadata:
