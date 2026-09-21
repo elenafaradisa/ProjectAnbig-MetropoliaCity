@@ -23,6 +23,7 @@ x-airflow-common: &airflow-common
     - ./spark:/opt/project/spark
     - ./data:/opt/project/data
     - ./config:/opt/project/config
+    - ./notebooks:/opt/project/notebooks
   depends_on:
     postgres:
       condition: service_healthy
