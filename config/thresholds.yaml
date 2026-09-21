@@ -4,11 +4,11 @@
 # the dashboard uses them, and document the reasoning in docs/keterbatasan.md.
 v2x_status:
   packet_loss_pct:
-    normal_max: null      # TODO: set from p50/p90 of core.observations.v2x_packet_loss_rate
-    waspada_max: null
+    normal_max: 14.79      # p50, from notebooks/01_audit_data.ipynb Test 5 (2026-09-21)
+    waspada_max: 31.02     # p90
   message_delay_ms:
-    normal_max: null
-    waspada_max: null
+     normal_max: 255.13     # p50
+     waspada_max: 451.01    # p90
 
 alert_levels:
   kritis:

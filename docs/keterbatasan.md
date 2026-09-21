@@ -72,3 +72,46 @@ audit notebook selesai, bukan angka tebakan.
 | GPS tidak stabil per segmen | Ditangani (grid ilustratif, ditandai jelas) |
 | Kolom sintetis | Diketahui, belum diaudit penuh |
 | Threshold V2X/alert | Belum diisi |
+
+## 5. Hasil audit notebook (notebooks/01_audit_data.ipynb, 2026-09-21)
+
+**Temporal consistency:** `dow_mismatch_rate = 0%` — day_of_week ternyata
+SELALU cocok dengan turunan timestamp (klaim awal di bagian 1 bahwa
+day_of_week juga bermasalah tidak terbukti; hanya time_of_day yang
+bermasalah). `tod_mismatch_rate` tidak acak — berjenjang persis di batas
+bucket jam (Night 90%, Morning 70%, Afternoon 60%, Evening 80%), dan
+implied match rate-nya (10%+30%+40%+20%) = tepat 100%. Pola ini konsisten
+dengan hipotesis: `time_of_day` mentah diisi acak dari distribusi tetap
+(~10/30/40/20% Night/Morning/Afternoon/Evening), independen dari jam
+sebenarnya — bukan cuma noise pengukuran.
+
+**Label consistency:** `anomaly_label`/`incident_type` 100% konsisten
+(0 dari 2.102.401 baris inkonsisten). `anomaly_rate` = 8.0%, sesuai
+temuan awal.
+
+**Distributional realism:** 6 dari 7 kolom yang dicurigai sintetis
+terkonfirmasi mendekati distribusi uniform (KS-test, p-value tinggi):
+`jam_density_index`, `lane_occupancy_rate`, `v2x_message_delay_avg`,
+`gps_latitude`, `gps_longitude`, `v2v_beacon_interval_avg`. **Kecuali
+`v2x_packet_loss_rate`** (KS-stat 0.51, jauh dari uniform) — satu-satunya
+kolom numerik yang distribusinya terlihat seperti data nyata, bukan
+sintetis acak.
+
+**Signal correlation — temuan paling penting untuk scope dashboard:**
+`anomaly_label` TIDAK berkorelasi dengan metrik lalu lintas manapun
+(korelasi 0.0003–0.0025, praktis nol; rata-rata vehicle_count/speed/
+hard_braking/rapid_accel/lane_occupancy nyaris identik antara baris
+normal vs anomali). **Konsekuensi:** dashboard tidak boleh mengklaim
+fitur "deteksi anomali" sebagai insight yang tervalidasi dari pola data
+lalu lintas — `anomaly_label`/`incident_type` cuma boleh ditampilkan
+sebagai catatan insiden yang tercatat (record), bukan hasil deteksi.
+
+ | Keterbatasan | Status |
+ |---|---|
+ | tod/dow mismatch | Ditangani (flag di `core.observations`) |
+ | GPS tidak stabil per segmen | Ditangani (grid ilustratif, ditandai jelas) |
+-| Kolom sintetis | Diketahui, belum diaudit penuh |
++| Kolom sintetis | Diaudit — 6/7 kolom curiga terkonfirmasi uniform; v2x_packet_loss_rate terkecuali |
++| anomaly_label tanpa sinyal fisik | Dikonfirmasi — dashboard tidak boleh klaim "deteksi", hanya "catatan insiden" |
+-| Threshold V2X/alert | Belum diisi |
++| Threshold V2X/alert | Terisi dari p50/p90 (lihat config/thresholds.yaml) |
