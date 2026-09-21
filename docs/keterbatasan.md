@@ -107,11 +107,9 @@ lalu lintas — `anomaly_label`/`incident_type` cuma boleh ditampilkan
 sebagai catatan insiden yang tercatat (record), bukan hasil deteksi.
 
  | Keterbatasan | Status |
- |---|---|
- | tod/dow mismatch | Ditangani (flag di `core.observations`) |
- | GPS tidak stabil per segmen | Ditangani (grid ilustratif, ditandai jelas) |
--| Kolom sintetis | Diketahui, belum diaudit penuh |
-+| Kolom sintetis | Diaudit — 6/7 kolom curiga terkonfirmasi uniform; v2x_packet_loss_rate terkecuali |
-+| anomaly_label tanpa sinyal fisik | Dikonfirmasi — dashboard tidak boleh klaim "deteksi", hanya "catatan insiden" |
--| Threshold V2X/alert | Belum diisi |
-+| Threshold V2X/alert | Terisi dari p50/p90 (lihat config/thresholds.yaml) |
+|---|---|
+| tod/dow mismatch | Ditangani sebagian — `dow_mismatch` ternyata 0% (day_of_week selalu cocok, klaim awal salah). `tod_mismatch` nyata dan **berpola sistematis** (Night 90%, Morning 70%, Afternoon 60%, Evening 80% — total match tepat 100%), konsisten dengan `time_of_day` diisi acak dari distribusi tetap ~10/30/40/20%. Di-flag di `core.observations`, belum diperbaiki. |
+| GPS tidak stabil per segmen | Ditangani (grid ilustratif, ditandai jelas) |
+| Kolom sintetis (6/7 kolom numerik lolos uji uniform: `jam_density_index`, `lane_occupancy_rate`, `v2x_message_delay_avg`, `gps_latitude`, `gps_longitude`, `v2v_beacon_interval_avg`) | Teridentifikasi (Test 4, KS-test) — dicatat sebagai keterbatasan, bukan bug. `v2x_packet_loss_rate` adalah pengecualian (KS-stat 0.51) — satu-satunya kolom yang polanya menyerupai data nyata. |
+| anomaly_label tanpa sinyal fisik (korelasi dengan metrik lalu lintas 0.0003–0.0025, praktis nol — Test 6) | Ditangani — dashboard menampilkan `anomaly_label`/`incident_type` sebagai catatan insiden (record), **bukan** hasil deteksi anomali yang tervalidasi dari data. |
+| Threshold V2X/alert (`config/thresholds.yaml`, diisi dari persentil p90/p99 hasil audit — Test 5) | Diisi dengan angka nyata dari data, tapi validitas terbatas: ambang `message_delay_ms` berbasis kolom sintetis (`v2x_message_delay_avg`), sedangkan ambang `packet_loss_pct` berbasis kolom yang lebih bisa dipercaya (`v2x_packet_loss_rate`). |
