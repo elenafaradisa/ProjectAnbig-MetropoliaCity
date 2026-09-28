@@ -1,8 +1,9 @@
-# data (large, never commit)
+﻿# data (large, never commit)
 data/raw/*
 !data/raw/.gitkeep
 data/parquet/
 data/run_stats/
+data/checkpoints/
 
 # secrets and local config
 .env
@@ -14,6 +15,5 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ipynb_checkpoints/
-
 
 notebooks/road_gps_stability_output.csv
