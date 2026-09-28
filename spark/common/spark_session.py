@@ -9,9 +9,9 @@ import os
 from pyspark.sql import SparkSession
 
 
-def get_spark(app_name: str) -> SparkSession:
-    driver_memory = os.environ.get("SPARK_DRIVER_MEMORY", "3g")
-    jdbc_jar = os.environ.get("JDBC_JAR")  # set in docker/airflow/Dockerfile
+def get_spark(app_name: str, packages: str | None = None) -> SparkSession:
+    driver_memory = os.environ.get("SPARK_DRIVER_MEMORY", "1500m") 
+    jdbc_jar = os.environ.get("JDBC_JAR")
 
     builder = (
         SparkSession.builder.appName(app_name)
@@ -21,6 +21,8 @@ def get_spark(app_name: str) -> SparkSession:
     )
     if jdbc_jar:
         builder = builder.config("spark.jars", jdbc_jar)
+    if packages:
+        builder = builder.config("spark.jars.packages", packages)
 
     return builder.getOrCreate()
 

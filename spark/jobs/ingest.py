@@ -77,7 +77,8 @@ def run(input_path: str, output_path: str, spark=None) -> int:
     print(f"Ingested {row_count} rows (read {total_read}).")
 
     (
-        df.write.mode("overwrite")
+        df.repartition("obs_year", "obs_month")
+        .write.mode("overwrite")
         .partitionBy("obs_year", "obs_month")
         .parquet(output_path)
     )
