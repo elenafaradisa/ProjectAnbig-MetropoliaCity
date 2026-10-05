@@ -1,275 +1,423 @@
-# ProjectAnbig-MetropoliaCity
+# MetropoliaCity — Analisis Big Data Lalu Lintas & Polusi Islamabad
 
-Smart-city big data course project: traffic congestion / incident analysis
-from the traffictab23 dataset (Islamabad-Rawalpindi, 2022-2024), building
-toward a dashboard for government analysts and field officers.
+Proyek mata kuliah Analisis Big Data. Data lalu lintas **traffictab23** (Islamabad–Rawalpindi, 2022–2023)
+dan data polusi udara Islamabad diolah menjadi **dashboard untuk analis pemerintah dan petugas lapangan**:
+peta jalan yang berwarna sesuai kepadatan, daftar insiden beserta pihak yang harus dihubungi, tren,
+prakiraan PM2.5, dan pemantauan kualitas data.
 
-**Status: ETL, data-quality audit, and dashboard-ready `mart` tables are
-complete.** The Streamlit dashboard itself has not been started yet — see
-[Status](#status) below for the exact breakdown.
+Pipeline berjalan dalam dua mode:
 
-## Stack
+- **Batch**: Airflow menjalankan PySpark untuk memuat seluruh dataset dua tahun ke PostgreSQL.
+- **Streaming (real-time)**: dataset yang sama diputar ulang lewat Kafka. Spark Structured Streaming
+  mengolahnya per micro-batch, dan dashboard ikut bergerak tanpa perlu di-refresh.
 
-- **PySpark** (local mode, no separate Spark cluster) — ETL (`ingest`,
-  `transform_load`, `quality_checks`)
-- **Airflow** — orchestrates the ETL DAG (`etl_traffic`)
-- **PostgreSQL** — stores everything (`core`, `mart`, `meta` schemas)
-- **Docker Compose** — runs Postgres + Airflow
-- **Jupyter** (run locally, outside Docker) — the analytical audit notebook
-- **DBeaver** (optional) — GUI client for browsing the database; see
-  [Inspecting the database with DBeaver](#inspecting-the-database-with-dbeaver)
+---
 
-## Quickstart
+## Daftar isi
 
-```bash
-cp .env.example .env
-# edit .env: set real passwords, and AIRFLOW_UID to `id -u` on Linux
+1. [Gambaran arsitektur](#1-gambaran-arsitektur)
+2. [Teknologi](#2-teknologi)
+3. [Struktur repositori](#3-struktur-repositori)
+4. [Menjalankan proyek dari nol](#4-menjalankan-proyek-dari-nol)
+5. [Demo streaming (satu perintah)](#5-demo-streaming-satu-perintah)
+6. [Halaman dashboard](#6-halaman-dashboard)
+7. [Model data (tabel PostgreSQL)](#7-model-data-tabel-postgresql)
+8. [Cara kerja pipeline](#8-cara-kerja-pipeline)
+9. [Keputusan desain penting](#9-keputusan-desain-penting)
+10. [Keterbatasan data](#10-keterbatasan-data)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Alur kerja Git](#12-alur-kerja-git)
 
-# put the dataset in place (see data/README.md)
-mkdir -p data/raw
-# copy traffictab23.csv into data/raw/
+---
 
-docker compose up -d --build
-# Airflow UI: http://localhost:8080 (user/pass from .env)
-# trigger the "etl_traffic" DAG from the UI, or:
-docker compose exec airflow-scheduler airflow dags trigger etl_traffic
+## 1. Gambaran arsitektur
+
+```mermaid
+flowchart LR
+    CSV[(traffictab23.csv)] -->|batch| AF[Airflow DAG<br/>etl_traffic]
+    AF --> SPB[PySpark<br/>ingest → transform → quality]
+    SPB --> CORE[(core.observations)]
+    CORE --> MART[(mart.*<br/>agregasi per jam, baseline, status)]
+
+    CSV -->|replay| PROD[producer.py]
+    PROD --> K[[Kafka<br/>traffic_topic]]
+    K --> SPS[Spark Structured Streaming<br/>stream-consumer]
+    SPS --> CS[(core.observations_stream)]
+    SPS --> MS[(mart.road_hourly_stream)]
+
+    POL[(data polusi)] --> AFP[Airflow DAG<br/>etl_pollution]
+    AFP --> PF[(mart.pollution_forecast)]
+
+    OSM[(OpenStreetMap<br/>Islamabad)] --> GEO[geo/assign_osm_roads.py]
+    GEO --> RP[(meta.road_positions)]
+
+    MART & MS & CS & PF & RP --> DASH[Dashboard Streamlit]
 ```
 
-**Postgres port note:** if port `5432` on your machine is already taken by
-a native PostgreSQL install (common on Windows — check with
-`netstat -ano | findstr :5432`), the `postgres` service in
-`docker-compose.yml` is mapped to host port **`5433`** instead
-(`"5433:5432"`). Connect external tools (DBeaver, notebooks, etc.) to
-`127.0.0.1:5433`, not `5432`. Commands run *inside* the containers
-(`docker compose exec ...`) are unaffected — they always use the internal
-port `5432`.
+Satu aturan utama: **dashboard hanya membaca** tabel yang sudah jadi. Semua perhitungan berat dikerjakan
+oleh pipeline (Airflow/Spark), jadi dashboard tetap ringan.
 
-Check ETL results:
+---
 
-```bash
-docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-  -c "select count(*) from core.observations;"
-docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-  -c "select category, metric_name, value, detail from meta.quality_results order by run_ts desc limit 20;"
-docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-  -c "select alert_level, count(*) from mart.road_current_status group by 1;"
-```
+## 2. Teknologi
 
-## Data model
-
-Three Postgres schemas, each with a different job:
-
-### `core` — cleaned, granular data (ETL output)
-
-- **`core.observations`** — one row per raw observation (~2.1M rows), the
-  23 original columns plus columns derived during transform (`observed_at`,
-  `weekday_from_ts`, `obs_hour`, `incident_name`, `is_weekend`,
-  `window_15min`) and data-quality flags (`tod_mismatch`, `dow_mismatch`,
-  `label_consistent`). See `spark/jobs/transform.py` for exactly what each
-  derived column means and why it exists.
-
-### `mart` — dashboard-ready aggregates, built from `core.observations`
-
-Built with plain SQL (`sql/mart/*.sql`), not Spark — these are aggregations
-over data already in Postgres, no need to re-read raw files. **Not yet
-wired into the Airflow DAG** — rerun the build scripts manually after any
-ETL rerun (see [Known limitation](#known-limitations--gaps) below).
-
-| Table/View | Grain | Purpose |
+| Komponen | Teknologi | Fungsi |
 |---|---|---|
-| `mart.road_window_stats` | `road_segment_id` × 15-min window | Granular rollup for time-series drill-down / future modelling |
-| `mart.road_hourly_stats` | `road_segment_id` × date × hour | Descriptive statistics per hour, for trend charts |
-| `mart.hour_of_week_baseline` | `road_segment_id` × day-of-week × hour | Historical mean/std of `anomaly_rate`, used to compute z-scores |
-| `mart.road_current_status` (view) | `road_segment_id` (101 rows) | Latest status per segment — `alert_level` (kritis/waspada/perhatian/normal) and `v2x_status` (kritis/waspada/normal), ready for map coloring |
+| Orkestrasi batch | Apache Airflow (LocalExecutor) | Menjalankan DAG `etl_traffic` dan `etl_pollution` |
+| Pengolahan data | PySpark 3.5 (local mode) | ETL batch dan Structured Streaming |
+| Message broker | Apache Kafka (KRaft, tanpa Zookeeper) | Menyimpan aliran event `traffic_topic` |
+| Database | PostgreSQL 16 | Skema `core` (data bersih), `mart` (agregasi), `meta` (kualitas, geometri jalan) |
+| Dashboard | Streamlit + Folium + Altair | Peta, grafik, tabel, auto-refresh |
+| Peta jalan | OpenStreetMap (Overpass API) | Geometri jalan nyata Islamabad |
+| Model polusi | scikit-learn (RandomForest) | Prakiraan PM2.5 satu jam ke depan |
+| Infrastruktur | Docker Compose | Semua service dalam satu perintah |
 
-To rebuild the mart tables after an ETL run:
+**Port yang dipakai di komputer host:**
 
-```bash
-docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < sql/mart/build_road_window_stats.sql
-docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < sql/mart/build_road_hourly_stats.sql
-docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < sql/mart/build_hour_of_week_baseline.sql
-```
+| Service | Port | Catatan |
+|---|---|---|
+| PostgreSQL | **5433** | Bukan 5432, agar tidak bentrok dengan PostgreSQL yang terpasang langsung di Windows |
+| Airflow UI | 8080 | Login memakai `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` dari `.env` |
+| Kafka | 9092 (antar-container), 9093 (dari host) | |
+| Dashboard | 8501 | Default Streamlit |
 
-(`mart.road_current_status` is a `VIEW`, so it updates automatically once
-the tables above are refreshed — no separate rebuild step.)
+---
 
-### `meta` — data about the data
-
-- **`meta.quality_results`** — one row per metric per ETL run (row counts,
-  null counts, duplicate checks, mismatch rates, `anomaly_rate`). Written
-  by `spark/jobs/quality_checks.py` on every DAG run.
-- **`meta.road_positions`** — map coordinates per `road_segment_id`
-  (101 rows). Raw GPS in the source data is **not** a stable per-segment
-  location (~4km spread — see `notebooks/road_gps_stability.py`), so this
-  uses `source = 'illustrative_grid'`: segments spread evenly across a
-  bounding box around Islamabad-Rawalpindi, for map-plotting only — **not**
-  real road locations. Built by `notebooks/populate_road_positions.py`.
-
-## Known limitations / gaps
-
-Full write-up: [`docs/keterbatasan.md`](docs/keterbatasan.md). Headline
-findings from the six-test analytical audit
-(`notebooks/01_audit_data.ipynb`):
-
-- `time_of_day` (raw) does not reliably match the hour derived from
-  `timestamp` — pattern is systematic (fixed-rate, not random noise), not
-  just corrupted. `day_of_week` (raw), however, always matches.
-- `anomaly_label`/`incident_type` are internally 100% consistent, but
-  carry **no correlation** with traffic metrics (vehicle count, speed,
-  hard-braking, etc.) — treat as recorded incidents, not
-  data-derived/validated anomaly detection.
-- Most numeric columns (GPS, `jam_density_index`, `lane_occupancy_rate`,
-  most V2X fields) look synthetic (uniform-distribution KS-test).
-  `v2x_packet_loss_rate` is the one exception — its distribution looks
-  like real sensor data.
-- **`mart` tables are not wired into the Airflow DAG.** If `etl_traffic`
-  reruns with new data, `core.observations` refreshes automatically
-  (`mode="overwrite"`), but `mart.*` will go stale until the build scripts
-  above are rerun manually. Fixing this (adding a DAG task) is on the
-  to-do list.
-
-## Config
-
-- **`config/incident_types.yaml`** — maps `incident_type` code (0-4) to a
-  human-readable name and who to contact. Used by `transform.py`.
-- **`config/thresholds.yaml`** — V2X status thresholds
-  (`packet_loss_pct`, `message_delay_ms`, each with `normal_max`/
-  `waspada_max`) and alert-level rules (`kritis`, `waspada`, `perhatian`).
-  Values were filled from p50/p90 percentiles found in the audit notebook
-  (2026-09-21) and are mirrored into the `CASE WHEN` logic inside
-  `sql/schemas/06_mart_road_current_status.sql` — **the two must be kept
-  in sync manually** if thresholds are revisited.
-
-## Inspecting the database with DBeaver
-
-Optional GUI alternative to `docker compose exec postgres psql ...`.
-
-1. Install [DBeaver Community](https://dbeaver.io/download/).
-2. New PostgreSQL connection: host `127.0.0.1`, port `5433` (see the port
-   note under Quickstart), database/user/password from `.env`.
-3. Browse `Schemas` → `core` / `mart` / `meta` → `Tables` (or `Views` for
-   `mart.road_current_status`) → double-click a table to see its data.
-4. Right-click a schema → **View Diagram** for an ER-style overview of its
-   tables and columns (there are no formal `FOREIGN KEY` constraints
-   between schemas in this project — relationships are implicit via
-   `road_segment_id` — so the diagram will show unconnected tables, which
-   is expected).
-
-## Repo layout
-
-## Repo layout
+## 3. Struktur repositori
 
 ```
-.
-├── airflow/
-│   ├── dags/
-│   │   └── dag_etl_traffic.py       DAG: ingest -> transform_load -> quality_checks
-│   └── logs/                        (gitignored, generated by Airflow)
-│
-├── spark/
-│   ├── jobs/
-│   │   ├── ingest.py                Extract: CSV -> partitioned Parquet (typed schema, drops malformed rows)
-│   │   ├── transform.py             Transform+Load: Parquet -> core.observations (derives weekday_from_ts, obs_hour, tod_mismatch, dow_mismatch, label_consistent, etc.)
-│   │   └── quality_checks.py        Load-time checks -> meta.quality_results (row counts, nulls, duplicates, mismatch rates, anomaly_rate)
-│   ├── common/
-│   │   ├── schema.py                RAW_SCHEMA, RAW_COLUMNS, CORE_COLUMNS, RANGE_CHECKS — single source of truth for column names/types
-│   │   └── spark_session.py         get_spark(), read/write helpers for Postgres (JDBC)
-│   └── tests/
-│       ├── test_ingest.py           Unit tests for ingest.py (no Postgres needed)
-│       └── test_transform.py        Unit tests for transform.py (no Postgres needed)
-│
-├── sql/
-│   ├── schemas/                     DDL — runs automatically on first `docker compose up` (docker-entrypoint-initdb.d)
-│   │   ├── 00_create_airflow_db.sql
-│   │   ├── 01_schemas.sql           CREATE SCHEMA core, mart, meta
-│   │   ├── 02_core_observations.sql DDL for core.observations
-│   │   ├── 03_meta_quality.sql      DDL for meta.quality_results, meta.road_positions
-│   │   ├── 04_mart_road_window_stats.sql
-│   │   ├── 05_mart_road_hourly_stats.sql
-│   │   ├── 06_mart_road_current_status.sql   VIEW: alert_level + v2x_status per segment
-│   │   └── 07_mart_hour_of_week_baseline.sql
-│   └── mart/                        Populate scripts — NOT auto-run, rerun manually after each ETL run
-│       ├── build_road_window_stats.sql
-│       ├── build_road_hourly_stats.sql
-│       └── build_hour_of_week_baseline.sql
-│
-├── notebooks/                       Run locally (not in Docker) — connect via psycopg2, not Spark
-│   ├── road_gps_stability.py        One-off: confirms GPS is not stable per road_segment_id (~4km spread)
-│   ├── populate_road_positions.py   Fills meta.road_positions (illustrative grid)
-│   └── 01_audit_data.ipynb          Six-test analytical audit (temporal consistency, label consistency, spatial stability, distributional realism, range plausibility, signal correlation)
-│
-├── config/
-│   ├── incident_types.yaml          incident_type code -> name -> who to contact
-│   └── thresholds.yaml              V2X status thresholds + alert-level rules (values filled from audit percentiles)
-│
-├── docs/
-│   └── keterbatasan.md              Data & pipeline limitations, audit findings, per-item status
-│
-├── data/
-│   ├── README.md                    Where to get traffictab23.csv, known data-quality issues
-│   ├── raw/                         traffictab23.csv goes here (gitignored)
-│   └── parquet/                     ingest.py output (gitignored)
-│
-├── docker/
-│   └── airflow/
-│       └── Dockerfile               Airflow + Java 17 + PySpark + Postgres JDBC driver + psycopg2-binary
-│
-├── docker-compose.yml                Postgres + Airflow (webserver/scheduler/init) services
-├── .env.example                      Template for .env (copy, fill in real passwords)
-├── .gitignore
-├── requirements-dev.txt              For running tests/notebooks locally, outside Docker
-└── README.md                         This file
+airflow/dags/            DAG Airflow (etl_traffic, etl_pollution)
+spark/
+  common/                schema, Spark session (zona waktu dikunci), helper Postgres
+  jobs/
+    ingest.py            CSV → Parquet
+    transform.py         Parquet → core.observations (pembersihan + kolom turunan)
+    quality_checks.py    pengecekan kualitas → meta.quality_results
+    stream_transform.py  Kafka → core.observations_stream + mart.road_hourly_stream
+  tests/                 unit test pytest (tanpa Postgres)
+streaming/
+  producer.py            replay CSV ke Kafka (mode interval tetap atau burst acak)
+  Dockerfile
+pollution/               pipeline polusi + quality check polusi
+ml/                      pelatihan model prakiraan PM2.5
+geo/
+  assign_osm_roads.py    memetakan road_segment_id ke jalan nyata Islamabad (OSM)
+sql/schemas/             DDL PostgreSQL, dijalankan otomatis saat volume Postgres pertama kali dibuat
+dashboard/
+  app.py                 titik masuk + navigasi
+  db.py                  semua query dashboard (dengan cache)
+  theme.py               warna, ambang status, format angka/tanggal
+  style.css
+  views/                 satu file per halaman (peta, insiden, streaming, tren, polusi, kualitas)
+config/
+  incident_types.yaml    kode insiden → nama → pihak yang dihubungi
+  thresholds.yaml
+docs/                    keterbatasan data, catatan demo
+docker/airflow/          Dockerfile Airflow + Java + PySpark + driver JDBC
+.streamlit/config.toml   tema dashboard
+docker-compose.yml
+demo.ps1                 demo streaming satu perintah (Windows PowerShell)
+requirements-dashboard.txt
+requirements-dev.txt
 ```
 
-## Running tests locally (without Docker)
+**Yang sengaja tidak masuk Git** (lihat `.gitignore`): `.env`, `data/raw/`, `data/parquet/`,
+`data/checkpoints/`, `data/models/` (file model berukuran 178 MB, melebihi batas GitHub), serta log.
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-PYTHONPATH=. pytest spark/tests/ -v
+---
+
+## 4. Menjalankan proyek dari nol
+
+### Prasyarat
+
+- Docker Desktop (Windows: backend WSL2). Proyek ini diuji pada alokasi memori WSL sekitar **3,7 GB**.
+  Tambah memorinya jika bisa.
+- Python 3.11+ di host, untuk menjalankan dashboard.
+- Dataset `traffictab23.csv` (dari Kaggle) dan data polusi (lihat `data/README.md`).
+
+### Langkah
+
+```powershell
+# 1. Konfigurasi
+copy .env.example .env
+#    lalu isi password di .env
+
+# 2. Letakkan dataset
+#    data\raw\traffictab23.csv
+
+# 3. Nyalakan semua service
+docker compose up -d --build
 ```
 
-These tests exercise `spark/jobs/ingest.py` and `spark/jobs/transform.py`
-directly (a local Spark session, no Postgres), so anyone can run them
-before opening a PR against `sigma`.
+`docker compose up -d` menyalakan Postgres, Kafka, Airflow, dan **stream-consumer**, yaitu streaming
+job yang langsung menunggu data. Producer **tidak** ikut menyala karena hanya dijalankan saat demo.
 
-### Running the audit notebook
+```powershell
+# 4. Jalankan pipeline batch (sekali saja, butuh beberapa menit)
+docker compose exec airflow-scheduler airflow dags trigger etl_traffic
+docker compose exec airflow-scheduler airflow dags trigger etl_pollution
+#    pantau progresnya di http://localhost:8080
 
-`notebooks/01_audit_data.ipynb` and the two `notebooks/*.py` scripts
-connect to Postgres directly (`psycopg2`), not through Spark, and are
-meant to be run **locally**, not inside Docker:
+# 5. Petakan segmen jalan ke peta Islamabad (sekali saja)
+#    lihat docstring di geo/assign_osm_roads.py
+
+# 6. Jalankan dashboard di host
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements-dashboard.txt
+streamlit run dashboard/app.py
+#    buka http://localhost:8501
+```
+
+> Jangan menjalankan DAG batch bersamaan dengan demo streaming. Dengan memori ~3,7 GB, keduanya
+> berebut RAM dan salah satu bisa dimatikan sistem (OOM).
+
+---
+
+## 5. Demo streaming (satu perintah)
+
+Semua kebutuhan demo ditangani oleh `demo.ps1`. Data yang sudah ada **tidak dihapus**, dan replay
+**melanjutkan** tepat setelah event terakhir yang tersimpan.
+
+| Perintah | Fungsi |
+|---|---|
+| `.\demo.ps1 -Check` | Pemeriksaan pra-demo (Kafka, Postgres, streaming job, sisa dataset, memori). Masalah yang bisa diperbaiki otomatis langsung diperbaiki. |
+| `.\demo.ps1 -Limit 1000 -BurstMax 50` | Kirim 1000 event, 1–50 event acak per detik |
+| `.\demo.ps1` | Kirim 600 event, 1 event per detik |
+| `.\demo.ps1 -Reset` | Kosongkan tabel streaming + checkpoint, lalu mulai lagi dari awal 2022 (tabel batch tidak disentuh) |
+| `.\demo.ps1 -Stop` | Hentikan streaming job |
+
+Jika Windows memblokir skrip, jalankan dengan `powershell -ExecutionPolicy Bypass -File .\demo.ps1 -Check`.
+
+**Urutan saat presentasi:**
+
+```powershell
+docker compose up -d
+.\demo.ps1 -Check                      # tunggu sampai muncul "Siap demo"
+streamlit run dashboard/app.py         # di terminal lain
+.\demo.ps1 -Limit 1000 -BurstMax 50    # ulangi untuk menambah data
+```
+
+Di dashboard, buka **Streaming langsung** lalu pilih **Live** di halaman **Peta** dan **Insiden**.
+Status berubah menjadi "Mengalir" sekitar 10–20 detik setelah producer mulai mengirim.
+
+**Mengapa demo ini tahan gangguan:**
+
+- Streaming job hanya berjalan di container `stream-consumer` dengan `restart: unless-stopped`.
+  Jika job mati (kehabisan memori, error, laptop tertidur), Docker menyalakannya lagi dan job
+  melanjutkan dari checkpoint.
+- Hanya ada satu container untuk job ini, jadi tidak mungkin ada dua job yang berjalan bersamaan.
+- Sink-nya idempoten, sehingga event yang terkirim dua kali tetap tersimpan satu kali (lihat [bagian 9](#9-keputusan-desain-penting)).
+
+---
+
+## 6. Halaman dashboard
+
+| Grup | Halaman | Isi | Sumber data |
+|---|---|---|---|
+| Operasional | **Peta lalu lintas** | Setiap segmen digambar sepanjang jalan aslinya di Islamabad, diwarnai menurut kepadatan (merah/oranye/biru). Ikon insiden diletakkan di titik tengah jalan. Klik jalan untuk melihat detail. Bisa dipilih Live atau Historis. | `mart.road_current_status(_live)`, `meta.road_positions` |
+| Operasional | **Insiden** | Insiden per jenis, segmen dengan insiden terbanyak, tren, dan 30 insiden terbaru beserta kontak penanganannya | `core.observations(_stream)` |
+| Operasional | **Streaming langsung** | Status aliran (Mengalir/Melambat/Berhenti), event per menit, event terbaru, dan bukti bahwa hasil streaming identik dengan hasil batch | `core.observations_stream` |
+| Analisis | **Tren kepadatan** | Heatmap hari × jam, profil harian, ringkasan per shift | `mart.road_hourly_stats`, `mart.shift_summary` |
+| Lingkungan | **Polusi udara** | PM2.5 aktual vs prakiraan, kategori AQI, dan akurasi model (MAE pada data uji) | `mart.pollution_forecast` |
+| Sistem | **Kualitas data** | Hasil quality check setiap run pipeline, dinilai otomatis (Lolos/Gagal/Temuan/Info), plus pengecekan langsung atas tabel streaming | `meta.quality_results` |
+
+Halaman dengan data live memperbarui diri sendiri (`st.fragment(run_every=…)`). Yang dimuat ulang
+hanya bagian datanya, bukan seluruh halaman.
+
+**Status kepadatan** (`dashboard/theme.py`), berdasarkan `jam_density_index`:
+
+| Status | Ambang | Warna |
+|---|---|---|
+| Kepadatan tinggi | ≥ 75 | merah |
+| Kepadatan sedang | 50–74,9 | oranye |
+| Kepadatan rendah | < 50 | biru |
+
+**Level peringatan segmen** (`alert_level`, dihitung di view SQL):
+
+| Level | Kondisi |
+|---|---|
+| kritis | Ada *Major accident* (2) atau *Road blockage* (4) dalam jam tersebut |
+| waspada | Tingkat anomali ≥ 2 simpangan baku di atas baseline jam-dalam-minggu segmen itu |
+| perhatian | Cuaca buruk atau permukaan jalan basah |
+| normal | Selain kondisi di atas |
+
+**Jenis insiden** (`config/incident_types.yaml`):
+
+| Kode | Jenis | Pihak yang dihubungi |
+|---|---|---|
+| 1 | Minor collision | Patroli / penanganan administratif |
+| 2 | Major accident | Ambulans dan polisi |
+| 3 | Signal disruption | Teknisi V2X / sinyal |
+| 4 | Road blockage | Tim derek / pembersihan |
+
+---
+
+## 7. Model data (tabel PostgreSQL)
+
+| Tabel / view | Isi | Diisi oleh |
+|---|---|---|
+| `core.observations` | Seluruh observasi lalu lintas yang sudah dibersihkan (2022–2023) | DAG `etl_traffic` |
+| `core.observations_stream` | Observasi yang masuk lewat streaming, ditambah kolom `ingested_at` (waktu tiba di DB) | `stream-consumer` |
+| `mart.road_hourly_stats` | Agregasi per segmen per jam (rata-rata kecepatan, kepadatan, jumlah insiden, dll.) | pipeline batch |
+| `mart.road_hourly_stream` | Struktur dan rumus sama dengan tabel di atas, tetapi diisi real-time (upsert) | `stream-consumer` |
+| `mart.road_window_stats` | Agregasi per jendela 15 menit | pipeline batch |
+| `mart.hour_of_week_baseline` | Rata-rata dan simpangan baku per segmen × hari × jam, sebagai dasar status `waspada` | pipeline batch |
+| `mart.road_current_status` / `_live` | **View**: status terkini tiap segmen (`alert_level`, `v2x_status`) | turunan dari dua tabel per jam di atas |
+| `mart.shift_summary` | Ringkasan insiden dan anomali per shift kerja | pipeline batch |
+| `mart.pollution_forecast` | PM2.5 aktual vs prakiraan per jam, per versi model | DAG `etl_pollution` |
+| `meta.quality_results` | Hasil setiap quality check per run | DAG batch |
+| `meta.road_positions` | Nama jalan, jenis jalan, panjang, geometri (`path`), dan titik tengah tiap segmen | `geo/assign_osm_roads.py` |
+
+Kolom waktu: `observed_at` adalah **waktu event**, yaitu timestamp asli di dataset (zona Asia/Karachi).
+`ingested_at` adalah **waktu proses**, yaitu saat baris masuk ke Postgres. Halaman Streaming memakai
+`ingested_at` untuk menilai apakah data sedang mengalir, dan memakai `observed_at` untuk isi analisisnya.
+
+---
+
+## 8. Cara kerja pipeline
+
+### Batch: `etl_traffic`
+
+```
+ingest (CSV → Parquet)  →  transform_load (Parquet → core.observations)  →  quality_checks (→ meta.quality_results)
+```
+
+- **Transform**: tipe data diperbaiki, nilai di luar rentang ditandai, dan kolom turunan dibuat
+  (`obs_date`, `obs_hour`, `window_15min`, nama insiden). Jam dihitung ulang dari `observed_at`
+  karena kolom `time_of_day` di data mentah tidak konsisten.
+- **Quality check**: jumlah baris, baris dobel, nilai di luar rentang, dan kecocokan
+  `anomaly_label` dengan `incident_type`. Hasilnya tampil di halaman Kualitas data.
+
+### Streaming: `stream_transform.py`
+
+```
+producer.py ──► Kafka traffic_topic ──► Spark (micro-batch tiap 10 detik)
+                                          ├─ query 1: transformasi sama dengan batch → core.observations_stream
+                                          └─ query 2: agregasi per jam (stateful)   → mart.road_hourly_stream
+```
+
+- **Query 1** memakai fungsi transformasi yang sama dengan pipeline batch. Kartu "Sama dengan batch"
+  di dashboard membuktikan hasilnya identik baris demi baris.
+- **Query 2** adalah agregasi stateful: `withWatermark("1 hour")` → `dropDuplicatesWithinWatermark`
+  → `window("1 hour")`, dengan output mode `update`. Setiap micro-batch hanya mengirim jendela jam
+  yang berubah, lalu jendela itu di-upsert ke `mart.road_hourly_stream`. Hasilnya, peta Live
+  berubah warna tanpa perlu menghitung ulang seluruh tabel.
+- Masing-masing query punya checkpoint sendiri: `data/checkpoints/traffic_stream` dan `…_hourly`.
+
+### Producer: `streaming/producer.py`
+
+| Argumen | Fungsi |
+|---|---|
+| `--interval 1.0` | Satu event setiap N detik |
+| `--burst-min / --burst-max` | Mode burst: jumlah event acak per detik |
+| `--limit N` | Berhenti setelah N event |
+| `--start "YYYY-MM-DD HH:MM:SS"` | Mulai dari timestamp ini (dipakai `demo.ps1` untuk melanjutkan replay) |
+| `--seed` | Seed acak untuk mode burst, agar hasilnya bisa diulang |
+
+### Peta: `geo/assign_osm_roads.py`
+
+Dataset hanya berisi `road_segment_id` berupa angka, tanpa nama atau koordinat. Skrip ini mengambil
+jalan bernama di Islamabad dari OpenStreetMap (Overpass API), lalu memasangkan setiap segmen ke
+satu jalan secara acak tetapi **deterministik** (seed 42, hasil di-cache ke JSON), sehingga setiap
+kali dijalankan hasilnya sama. Hasilnya 101 segmen terpetakan ke 73 jalan. Titik tengah setiap jalan
+dihitung berdasarkan panjang garisnya, dan di titik itulah ikon insiden diletakkan.
+
+> Pemetaan ini **ilustratif**. Dataset tidak menyebut lokasi asli segmen, jadi nama jalan di peta
+> tidak boleh dibaca sebagai lokasi kejadian yang sebenarnya.
+
+---
+
+## 9. Keputusan desain penting
+
+**Sink idempoten (exactly-once secara efektif).** Checkpoint Spark hanya menjamin *at-least-once*
+untuk penulisan JDBC. Batch yang crash setelah menulis akan diproses ulang, dan producer yang
+dijalankan ulang bisa mengirim event yang sama lagi. Karena itu, setiap micro-batch ditulis dulu ke
+tabel staging, lalu digabung dengan `INSERT … ON CONFLICT (observed_at) DO NOTHING` di atas indeks
+unik `observed_at`. Seberapa sering pun sebuah event datang, ia tersimpan tepat satu kali. Log job
+menampilkan baris seperti `N received, N new, N already in … (skipped)`.
+
+**Zona waktu dikunci.** JDBC menulis timestamp memakai zona waktu JVM. Jika zona JVM berbeda dari
+`spark.sql.session.timeZone`, semua jam bergeser 5 jam. Karena itu `spark/common/spark_session.py`
+mengunci keduanya ke `Asia/Karachi` lewat `-Duser.timezone=Asia/Karachi`. **Jangan** menimpa
+pengaturan zona waktu di dalam job.
+
+**Streaming job hanya di `stream-consumer`.** Menjalankan job lewat `docker compose exec` di
+`airflow-scheduler` pernah menyebabkan beberapa job berjalan bersamaan, memakan memori, dan
+meninggalkan watermark lama yang membuang event baru. Sejak itu, job hanya dijalankan di container
+`stream-consumer` (satu container, `restart: unless-stopped`, `mem_limit: 1800m`, driver Spark 1 GB).
+
+**`--starting-offsets latest`.** Opsi ini hanya berlaku untuk checkpoint baru, yaitu saat pertama
+kali menyala atau setelah `-Reset`. Job lalu mengabaikan jutaan pesan lama yang masih ada di topic.
+Jika checkpoint sudah ada, job selalu melanjutkan dari offset miliknya sendiri.
+
+**Query live dibatasi waktu.** Saat tabel streaming membesar sampai jutaan baris, query yang
+memindai seluruh tabel butuh 2–3 detik. Karena itu, query live hanya membaca jendela waktu terbaru
+(misalnya 24 jam waktu event untuk halaman Insiden, 5 menit untuk perbandingan dengan batch), dan
+jumlah baris diperkirakan dari statistik PostgreSQL di atas 200 ribu baris. Hasilnya, setiap query
+selesai dalam sekitar 5–150 ms berapa pun ukuran tabelnya.
+
+**Folder `views/`, bukan `pages/`.** Streamlit memperlakukan `pages/` sebagai mode multipage lama.
+Dalam mode itu, tautan langsung seperti `/polusi` menjalankan file halaman tanpa `app.py`, sehingga
+style dan import tidak termuat.
+
+---
+
+## 10. Keterbatasan data
+
+Rinciannya ada di `docs/keterbatasan.md`. Yang paling penting untuk presentasi:
+
+- **traffictab23 adalah data sintetis.** Kolom-kolomnya dibangkitkan secara independen dan seragam.
+- **`jam_density_index` tidak berhubungan dengan kecepatan** (korelasi −0,002; rata-rata kecepatan
+  60,0 km/j di setiap kelompok kepadatan). Karena itu, label di dashboard adalah "Kepadatan
+  tinggi/sedang/rendah", **bukan** "macet/lancar".
+- **Tidak ada pola jam sibuk.** Selisih antar jam hanya 3,1% dan antar shift 0,59%. Halaman Tren
+  sengaja memakai skala penuh agar hasil yang datar memang terlihat datar, bukan diperbesar menjadi
+  pola palsu.
+- **Lokasi jalan di peta bersifat ilustratif** (lihat [bagian 8](#peta-geoassign_osm_roadspy)).
+
+Pipeline dan dashboard dirancang untuk data nyata. Begitu sumber data diganti dengan data sensor
+sungguhan, pola-pola di atas akan muncul tanpa perlu mengubah kode.
+
+---
+
+## 11. Troubleshooting
+
+| Gejala | Penyebab | Solusi |
+|---|---|---|
+| Dashboard tidak bergerak, padahal producer mengirim | Streaming job belum siap atau mati | `.\demo.ps1 -Check` |
+| `password authentication failed` dari dashboard | Dashboard tersambung ke PostgreSQL Windows di port 5432 | Pastikan `.env`/default memakai port **5433** (`DASHBOARD_POSTGRES_PORT`) |
+| Jam di grafik bergeser 5 jam | Zona waktu JVM ≠ zona sesi Spark | Lihat [bagian 9](#9-keputusan-desain-penting); jangan menimpa `spark.sql.session.timeZone` di job |
+| Container mati dengan `oom_kill` / exit 137 | Memori Docker habis | Jangan menjalankan DAG batch bersamaan dengan streaming; cek `docker stats` |
+| `VACUUM` gagal karena *shared memory* | `/dev/shm` container Postgres terlalu kecil | Sudah diatasi dengan `shm_size: 256mb`; jika tetap gagal, pakai `VACUUM (PARALLEL 0)` |
+| Seluruh dataset sudah diputar | Replay sudah sampai akhir 2023 | `.\demo.ps1 -Reset` |
+| Agregasi per jam tertinggal beberapa event | Kedua query streaming menulis di micro-batch masing-masing | Normal jika hanya sesaat; jika tidak berkurang setelah 1 menit, cek `docker logs stream-consumer` |
+| `docker compose up` menjalankan producer | Compose versi lama | Producer seharusnya memakai `profiles: ["manual"]` |
+| Log `HDFSBackedStateStoreProvider … version N doesn't exist` | State agregasi sedang dimuat dari checkpoint | Normal saat job baru menyala |
+
+Perintah yang sering dipakai:
+
+```powershell
+docker logs --tail 30 stream-consumer      # log streaming job
+docker stats --no-stream                    # pemakaian memori per container
+docker compose exec postgres psql -U metropolia -d metropolia `
+  -c "SELECT count(*), max(observed_at), max(ingested_at) FROM core.observations_stream"
+```
+
+---
+
+## 12. Alur kerja Git
+
+- Branch integrasi adalah `sigma`. Buat branch fitur dari situ (`feat/<nama-singkat>`), lalu buka
+  PR kembali ke `sigma` dan minta satu review.
+- **Jangan commit** `.env`, file di `data/` (dataset, parquet, checkpoint, model), atau file di atas
+  100 MB, karena GitHub akan menolak push.
+- Unit test bisa dijalankan tanpa Docker:
 
 ```powershell
 pip install -r requirements-dev.txt
-jupyter notebook notebooks/01_audit_data.ipynb
+$env:PYTHONPATH="."; pytest spark/tests -v
 ```
 
-They read connection details from `.env` via `python-dotenv`
-(`load_dotenv()`); if running from a subdirectory, use
-`load_dotenv(find_dotenv(usecwd=True))` to make sure `.env` is found.
-Remember the port note above — connect to `127.0.0.1:5433`, or whichever
-port your `postgres` service is actually mapped to.
-
-## Git workflow
-
-Branch `sigma` is the integration branch. Create a feature branch from it
-(`feat/<short-name>`), open a PR back into `sigma`, get one review.
-Suggested folder ownership to reduce merge conflicts:
-
-- `docker/`, `docker-compose.yml`, `airflow/` — infra
-- `spark/`, `sql/`, `config/` — pipeline
-- `notebooks/`, `docs/`, `tests/` — analysis & docs
-- `dashboard/` — later stage, not part of this week's scope
-
-## Status
-
-- [x] Repo skeleton, Docker Compose (Postgres + Airflow), Postgres schemas (`core`, `mart`, `meta`)
-- [x] ETL: `ingest` (CSV -> partitioned Parquet), `transform_load` (-> `core.observations`), `quality_checks` (-> `meta.quality_results`)
-- [x] Unit tests for ingest/transform logic (11 passing, run without Postgres)
-- [x] Road positions (`meta.road_positions`, illustrative grid — raw GPS confirmed unstable per segment)
-- [x] Full six-test analytical audit (`notebooks/01_audit_data.ipynb`)
-- [x] `docs/keterbatasan.md` — limitations documented from audit findings
-- [x] `config/thresholds.yaml` — filled from audit percentiles (p50/p90)
-- [x] `mart` schema: `road_window_stats`, `road_hourly_stats`, `hour_of_week_baseline`, `road_current_status` (with `alert_level` + `v2x_status`)
-- [ ] Wire `mart` build scripts into the Airflow DAG (currently manual — see [Known limitations](#known-limitations--gaps))
-- [ ] Dashboard (Streamlit) — not started
+**Menambah fitur dashboard:** buat file baru di `dashboard/views/`, tambahkan query-nya di
+`dashboard/db.py`, lalu daftarkan halamannya di `dashboard/app.py`. Halaman lain tidak perlu diubah.
