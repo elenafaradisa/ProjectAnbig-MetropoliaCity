@@ -1,4 +1,4 @@
-# MetropoliaCity — Analisis Big Data Lalu Lintas & Polusi Islamabad
+# Analisis Big Data Lalu Lintas & Polusi Islamabad
 
 Proyek mata kuliah Analisis Big Data. Data lalu lintas **traffictab23** (Islamabad–Rawalpindi, 2022–2023)
 dan data polusi udara Islamabad diolah menjadi **dashboard untuk analis pemerintah dan petugas lapangan**:
