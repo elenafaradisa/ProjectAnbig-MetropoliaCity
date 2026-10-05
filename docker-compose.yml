@@ -24,13 +24,19 @@ x-airflow-common: &airflow-common
     - ./data:/opt/project/data
     - ./config:/opt/project/config
     - ./notebooks:/opt/project/notebooks
+    - ./pollution:/opt/project/pollution
+    - ./ml:/opt/project/ml
+    - ./geo:/opt/project/geo
+
   depends_on:
     postgres:
       condition: service_healthy
 
+
 services:
   postgres:
     image: postgres:16
+    shm_size: 256mb
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -77,6 +83,10 @@ services:
       context: ./streaming
       dockerfile: Dockerfile
     container_name: traffic-producer
+    # Only runs when asked for (demo.ps1 / "docker compose run producer ..."),
+    # never as a side effect of "docker compose up -d" -- that used to replay
+    # the first 300 rows of 2022 again on every start.
+    profiles: ["manual"]
     volumes:
       - ./data:/app/data
     command:
@@ -97,22 +107,35 @@ services:
   stream-consumer:
     <<: *airflow-common
     container_name: stream-consumer
+    # The streaming job runs ONLY here (never via "docker compose exec" in
+    # airflow-scheduler): one container = never two jobs at once.
+    # restart: if the job dies (out of memory, an error, the laptop sleeping),
+    # Docker starts it again and it resumes from its checkpoint -- no lost or
+    # duplicated rows (idempotent sink).
+    restart: unless-stopped
+    mem_limit: 1800m
     entrypoint: /bin/bash
+    # SPARK_DRIVER_MEMORY=1g: the batch default (3g) does not fit next to the
+    # other containers. --starting-offsets latest only applies to a brand-new
+    # checkpoint (first start or after demo.ps1 -Reset): the job then ignores
+    # the old messages already in the topic instead of re-reading millions of
+    # them. With an existing checkpoint it always continues from its own offsets.
     command:
       - -c
       - |
-        cd /opt/project && python -m spark.jobs.stream_transform \
+        export SPARK_DRIVER_MEMORY=1g
+        cd /opt/project && exec python -m spark.jobs.stream_transform \
           --config /opt/project/config/incident_types.yaml \
           --topic traffic_topic \
           --bootstrap-servers kafka:9092 \
           --checkpoint-dir /opt/project/data/checkpoints/traffic_stream \
-          --starting-offsets earliest
+          --starting-offsets latest
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
         condition: service_healthy
-        
+
   airflow-init:
     <<: *airflow-common
     entrypoint: /bin/bash

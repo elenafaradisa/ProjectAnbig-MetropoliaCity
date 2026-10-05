@@ -1,5 +1,14 @@
+"""Replay traffictab23 into Kafka, in timestamp order.
+
+Two pacing modes:
+  - steady (default): one event, then sleep --interval seconds;
+  - burst: every second, send a random number of events between
+    --burst-min and --burst-max (until --limit is reached), to show the
+    pipeline coping with an uneven load. Enabled by giving --burst-max.
+"""
 import argparse
 import json
+import random
 import time
 
 import pandas as pd
@@ -33,22 +42,45 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="batasi jumlah baris (untuk demo)")
     parser.add_argument("--start", default=None, help="ISO date, mulai dari timestamp ini")
     parser.add_argument("--end", default=None, help="ISO date, berhenti sebelum timestamp ini")
+    parser.add_argument("--burst-min", type=int, default=1,
+                        help="mode burst: jumlah event minimum per detik")
+    parser.add_argument("--burst-max", type=int, default=None,
+                        help="mode burst: jumlah event maksimum per detik (mengaktifkan mode burst)")
+    parser.add_argument("--seed", type=int, default=None, help="seed acak untuk mode burst (opsional)")
     args = parser.parse_args()
 
     print(f"Membaca & mengurutkan {args.csv} berdasarkan timestamp...")
     df = load_sorted_rows(args.csv, args.start, args.end, args.limit)
-    print(f"Akan mengirim {len(df)} baris, jeda {args.interval}s per baris.")
-
     producer = KafkaProducer(
         bootstrap_servers=args.bootstrap_servers,
         value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
     )
+    rows = df.to_dict(orient="records")
 
-    for i, row in enumerate(df.to_dict(orient="records"), start=1):
-        producer.send(args.topic, row)
-        if i % 50 == 0 or i == len(df):
-            print(f"[{i}/{len(df)}] terkirim, timestamp terakhir={row['timestamp']}")
-        time.sleep(args.interval)
+    if args.burst_max:
+        if args.burst_min < 1 or args.burst_max < args.burst_min:
+            raise SystemExit("--burst-min harus >= 1 dan <= --burst-max")
+        rnd = random.Random(args.seed)
+        print(f"Mode burst: {len(rows)} baris, {args.burst_min}-{args.burst_max} event per detik.")
+        sent, second = 0, 0
+        while sent < len(rows):
+            started = time.monotonic()
+            k = min(rnd.randint(args.burst_min, args.burst_max), len(rows) - sent)
+            for row in rows[sent:sent + k]:
+                producer.send(args.topic, row)
+            producer.flush()  # the whole burst leaves within this second
+            sent += k
+            second += 1
+            print(f"[detik {second}] {k} event terkirim, total {sent}/{len(rows)}, "
+                  f"timestamp terakhir={rows[sent - 1]['timestamp']}")
+            time.sleep(max(0.0, 1.0 - (time.monotonic() - started)))
+    else:
+        print(f"Akan mengirim {len(rows)} baris, jeda {args.interval}s per baris.")
+        for i, row in enumerate(rows, start=1):
+            producer.send(args.topic, row)
+            if i % 50 == 0 or i == len(rows):
+                print(f"[{i}/{len(rows)}] terkirim, timestamp terakhir={row['timestamp']}")
+            time.sleep(args.interval)
 
     producer.flush()
     print("Selesai mengirim semua baris.")

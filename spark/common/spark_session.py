@@ -18,6 +18,11 @@ def get_spark(app_name: str, packages: str | None = None) -> SparkSession:
         .master(os.environ.get("SPARK_MASTER", "local[*]"))
         .config("spark.driver.memory", driver_memory)
         .config("spark.sql.session.timeZone", "Asia/Karachi")
+        # JDBC converts timestamps with the JVM's default timezone, not the
+        # Spark session's: pin both to Asia/Karachi, or every TIMESTAMP column
+        # lands in Postgres 5 hours early (the container JVM defaults to UTC).
+        .config("spark.driver.extraJavaOptions", "-Duser.timezone=Asia/Karachi")
+        .config("spark.executor.extraJavaOptions", "-Duser.timezone=Asia/Karachi")
     )
     if jdbc_jar:
         builder = builder.config("spark.jars", jdbc_jar)

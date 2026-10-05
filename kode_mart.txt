@@ -1,0 +1,258 @@
+﻿===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\mart\build_hour_of_week_baseline.sql
+-- Full refresh, rerun after every ETL run (like the other mart builds).
+TRUNCATE TABLE mart.hour_of_week_baseline;
+
+INSERT INTO mart.hour_of_week_baseline (
+    road_segment_id, day_of_week, obs_hour, n_weeks,
+    baseline_mean_anomaly_rate, baseline_std_anomaly_rate
+)
+SELECT
+    road_segment_id,
+    extract(dow from obs_date)::smallint    AS day_of_week,
+    obs_hour,
+    count(*)                                 AS n_weeks,
+    avg(anomaly_rate)                        AS baseline_mean_anomaly_rate,
+    stddev(anomaly_rate)                     AS baseline_std_anomaly_rate
+FROM mart.road_hourly_stats
+GROUP BY road_segment_id, extract(dow from obs_date), obs_hour;
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\mart\build_hour_of_week_city_summary.sql
+-- Full-refresh: kosongkan lalu isi ulang dari mart.road_hourly_stats.
+-- day_of_week dihitung dari obs_date (bukan dari kolom day_of_week
+-- mentah yang tidak dipakai di sini), konsisten dengan pendekatan
+-- di build_hour_of_week_baseline.sql.
+TRUNCATE mart.hour_of_week_city_summary;
+
+INSERT INTO mart.hour_of_week_city_summary (
+    day_of_week, obs_hour, avg_anomaly_rate, avg_incident_count, n_segment_hours
+)
+SELECT
+    extract(dow from obs_date)::smallint AS day_of_week,
+    obs_hour,
+    avg(anomaly_rate)   AS avg_anomaly_rate,
+    avg(incident_count) AS avg_incident_count,
+    count(*)            AS n_segment_hours
+FROM mart.road_hourly_stats
+GROUP BY 1, 2;
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\mart\build_road_hourly_stats.sql
+-- Full refresh, same convention as build_road_window_stats.sql — rerun
+-- after every ETL run.
+TRUNCATE TABLE mart.road_hourly_stats;
+
+INSERT INTO mart.road_hourly_stats (
+    road_segment_id, obs_date, obs_hour, n_observations,
+    avg_vehicle_count, avg_average_speed, avg_lane_occupancy_rate,
+    avg_jam_density_index, incident_count, anomaly_rate, max_incident_type,
+    avg_v2x_packet_loss_rate, avg_v2x_message_delay_avg, 
+    any_bad_weather, any_wet_surface
+)
+SELECT
+    road_segment_id,
+    obs_date,
+    obs_hour,
+    count(*)                                      AS n_observations,
+    avg(vehicle_count)                            AS avg_vehicle_count,
+    avg(average_speed)                            AS avg_average_speed,
+    avg(lane_occupancy_rate)                      AS avg_lane_occupancy_rate,
+    avg(jam_density_index)                        AS avg_jam_density_index,
+    count(*) filter (where incident_type != 0)    AS incident_count,
+    avg(anomaly_label::int)                       AS anomaly_rate,
+    max(incident_type)                            AS max_incident_type,
+    avg(v2x_packet_loss_rate)                     AS avg_v2x_packet_loss_rate,
+    avg(v2x_message_delay_avg)                    AS avg_v2x_message_delay_avg,
+    bool_or(weather_condition in ('Rain', 'Snow'))  AS any_bad_weather,
+    bool_or(road_surface_status = 'Wet')            AS any_wet_surface
+FROM core.observations
+GROUP BY road_segment_id, obs_date, obs_hour;
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\mart\build_road_window_stats.sql
+-- Rebuild mart.road_window_stats from core.observations. Full refresh
+-- (TRUNCATE + INSERT), matching transform.py's overwrite semantics —
+-- rerun this after every ETL run, not incrementally.
+TRUNCATE TABLE mart.road_window_stats;
+
+INSERT INTO mart.road_window_stats (
+    road_segment_id, window_15min, obs_date, obs_hour, n_observations,
+    avg_vehicle_count, avg_average_speed, avg_lane_occupancy_rate,
+    avg_jam_density_index, incident_count, anomaly_rate, max_incident_type,
+    avg_v2x_packet_loss_rate, avg_v2x_message_delay_avg
+)
+SELECT
+    road_segment_id,
+    window_15min,
+    date(window_15min)                          AS obs_date,
+    extract(hour from window_15min)::smallint    AS obs_hour,
+    count(*)                                      AS n_observations,
+    avg(vehicle_count)                            AS avg_vehicle_count,
+    avg(average_speed)                            AS avg_average_speed,
+    avg(lane_occupancy_rate)                      AS avg_lane_occupancy_rate,
+    avg(jam_density_index)                        AS avg_jam_density_index,
+    count(*) filter (where incident_type != 0)    AS incident_count,
+    avg(anomaly_label::int)                       AS anomaly_rate,
+    max(incident_type)                            AS max_incident_type,
+    avg(v2x_packet_loss_rate)                     AS avg_v2x_packet_loss_rate,
+    avg(v2x_message_delay_avg)                    AS avg_v2x_message_delay_avg
+FROM core.observations
+GROUP BY road_segment_id, window_15min;
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\schemas\04_mart_road_window_stats.sql
+-- Dashboard-ready 15-minute rollup per road segment, built from
+-- core.observations after ETL + audit. See notebooks/01_audit_data.ipynb
+-- Test 6: anomaly_label / incident_type do NOT correlate with traffic
+-- metrics in this dataset. Columns here are aggregates only — do not
+-- build dashboard features that imply the incident/anomaly counts are
+-- derived from or explained by the traffic metrics in the same row.
+CREATE TABLE IF NOT EXISTS mart.road_window_stats (
+    road_segment_id            INTEGER          NOT NULL,
+    window_15min                TIMESTAMP        NOT NULL,
+    obs_date                    DATE             NOT NULL,
+    obs_hour                    SMALLINT         NOT NULL,
+    n_observations               INTEGER          NOT NULL,
+    avg_vehicle_count            DOUBLE PRECISION,
+    avg_average_speed            DOUBLE PRECISION,
+    avg_lane_occupancy_rate      DOUBLE PRECISION,
+    avg_jam_density_index        DOUBLE PRECISION,
+    incident_count                INTEGER          NOT NULL,  -- rows where incident_type != 0
+    anomaly_rate                  DOUBLE PRECISION NOT NULL,  -- share where anomaly_label = 1
+    max_incident_type             SMALLINT         NOT NULL,  -- worst incident in this window (0-4)
+    avg_v2x_packet_loss_rate     DOUBLE PRECISION,
+    avg_v2x_message_delay_avg    DOUBLE PRECISION,
+    PRIMARY KEY (road_segment_id, window_15min)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mart_road_window_date
+    ON mart.road_window_stats (obs_date);
+CREATE INDEX IF NOT EXISTS idx_mart_road_window_segment
+    ON mart.road_window_stats (road_segment_id);
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\schemas\05_mart_road_hourly_stats.sql
+-- Coarser rollup than mart.road_window_stats (15-min): per road segment
+-- per calendar hour. Built for the dashboard's first-look summary/map,
+-- where road_window_stats (barely smaller than core.observations, see
+-- project discussion 2026-09-21) is too granular to be useful as an
+-- overview.
+CREATE TABLE IF NOT EXISTS mart.road_hourly_stats (
+    road_segment_id            INTEGER          NOT NULL,
+    obs_date                    DATE             NOT NULL,
+    obs_hour                    SMALLINT         NOT NULL,
+    n_observations               INTEGER          NOT NULL,
+    avg_vehicle_count            DOUBLE PRECISION,
+    avg_average_speed            DOUBLE PRECISION,
+    avg_lane_occupancy_rate      DOUBLE PRECISION,
+    avg_jam_density_index        DOUBLE PRECISION,
+    incident_count                INTEGER          NOT NULL,
+    anomaly_rate                  DOUBLE PRECISION NOT NULL,
+    max_incident_type             SMALLINT         NOT NULL,
+    avg_v2x_packet_loss_rate     DOUBLE PRECISION,
+    avg_v2x_message_delay_avg    DOUBLE PRECISION,
+    any_bad_weather               BOOLEAN          NOT NULL,
+    any_wet_surface                BOOLEAN          NOT NULL,
+    PRIMARY KEY (road_segment_id, obs_date, obs_hour)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mart_hourly_date
+    ON mart.road_hourly_stats (obs_date);
+CREATE INDEX IF NOT EXISTS idx_mart_hourly_segment
+    ON mart.road_hourly_stats (road_segment_id);
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\schemas\06_mart_road_current_status.sql
+-- Latest hourly stats per road segment — what the dashboard map's default
+-- view should query (one row per road_segment_id, ~101 rows), instead of
+-- scanning all of mart.road_hourly_stats. A VIEW, not a table: always
+-- reflects the latest row in road_hourly_stats without a separate refresh
+-- step (refresh road_hourly_stats via sql/mart/build_road_hourly_stats.sql
+-- and this view updates automatically on next query).
+CREATE OR REPLACE VIEW mart.road_current_status AS
+SELECT DISTINCT ON (h.road_segment_id)
+    h.road_segment_id,
+    h.obs_date,
+    h.obs_hour,
+    h.n_observations,
+    h.avg_vehicle_count,
+    h.avg_average_speed,
+    h.avg_lane_occupancy_rate,
+    h.avg_jam_density_index,
+    h.incident_count,
+    h.anomaly_rate,
+    h.max_incident_type,
+    h.avg_v2x_packet_loss_rate,
+    h.avg_v2x_message_delay_avg,
+    h.any_bad_weather,
+    h.any_wet_surface,
+    CASE
+        WHEN b.baseline_std_anomaly_rate IS NULL OR b.baseline_std_anomaly_rate = 0 THEN NULL
+        ELSE (h.anomaly_rate - b.baseline_mean_anomaly_rate) / b.baseline_std_anomaly_rate
+    END AS anomaly_rate_zscore,
+    -- Traffic/incident alert level. Order matters: kritis beats waspada
+    -- beats perhatian (config/thresholds.yaml alert_levels order).
+    CASE
+        WHEN h.max_incident_type IN (2, 4) THEN 'kritis'
+        WHEN b.baseline_std_anomaly_rate IS NOT NULL
+             AND b.baseline_std_anomaly_rate > 0
+             AND (h.anomaly_rate - b.baseline_mean_anomaly_rate) / b.baseline_std_anomaly_rate >= 2.0
+            THEN 'waspada'
+        WHEN h.any_bad_weather OR h.any_wet_surface THEN 'perhatian'
+        ELSE 'normal'
+    END AS alert_level,
+    -- V2X connectivity status, separate axis from traffic alert_level.
+    -- Bounds mirrored from config/thresholds.yaml v2x_status (p50/p90 from
+    -- notebooks/01_audit_data.ipynb, 2026-09-21) — keep in sync manually.
+    CASE
+        WHEN h.avg_v2x_packet_loss_rate > 31.02 OR h.avg_v2x_message_delay_avg > 451.01 THEN 'kritis'
+        WHEN h.avg_v2x_packet_loss_rate > 14.79 OR h.avg_v2x_message_delay_avg > 255.13 THEN 'waspada'
+        ELSE 'normal'
+    END AS v2x_status
+FROM mart.road_hourly_stats h
+LEFT JOIN mart.hour_of_week_baseline b
+    ON b.road_segment_id = h.road_segment_id
+    AND b.day_of_week = extract(dow from h.obs_date)::smallint
+    AND b.obs_hour = h.obs_hour
+ORDER BY h.road_segment_id, h.obs_date DESC, h.obs_hour DESC;
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\schemas\07_mart_hour_of_week_baseline.sql
+-- Historical baseline (mean + std of anomaly_rate) per road_segment_id,
+-- day-of-week, and hour — built from mart.road_hourly_stats across all
+-- ~104 weeks of history. Used to compute anomaly_rate_zscore in
+-- mart.road_current_status (config/thresholds.yaml alert_levels.waspada:
+-- anomaly_rate_zscore_min: 2.0).
+CREATE TABLE IF NOT EXISTS mart.hour_of_week_baseline (
+    road_segment_id              INTEGER          NOT NULL,
+    day_of_week                   SMALLINT         NOT NULL,  -- extract(dow from date): 0=Sunday..6=Saturday
+    obs_hour                      SMALLINT         NOT NULL,
+    n_weeks                       INTEGER          NOT NULL,
+    baseline_mean_anomaly_rate    DOUBLE PRECISION,
+    baseline_std_anomaly_rate     DOUBLE PRECISION,
+    PRIMARY KEY (road_segment_id, day_of_week, obs_hour)
+);
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\schemas\08_mart_hour_of_week_city_summary.sql
+-- Citywide (semua segmen digabung) agregat hari-of-week x jam.
+-- Beda dari mart.hour_of_week_baseline (per road_segment_id, dipakai
+-- untuk anomaly_rate_zscore) — tabel ini untuk kebutuhan level-kota:
+-- heatmap Supervisor dan estimasi kebutuhan petugas per shift.
+CREATE TABLE IF NOT EXISTS mart.hour_of_week_city_summary (
+    day_of_week SMALLINT NOT NULL,
+    obs_hour SMALLINT NOT NULL,
+    avg_anomaly_rate DOUBLE PRECISION NOT NULL,
+    avg_incident_count DOUBLE PRECISION NOT NULL,
+    n_segment_hours INTEGER NOT NULL,
+    PRIMARY KEY (day_of_week, obs_hour)
+);
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\schemas\09_mart_shift_summary.sql
+-- Ringkasan per shift (4 blok waktu), dari mart.hour_of_week_city_summary.
+-- View, bukan tabel — otomatis ikut ter-update saat city_summary di-refresh,
+-- tidak perlu build script terpisah.
+CREATE OR REPLACE VIEW mart.shift_summary AS
+SELECT
+    CASE
+        WHEN obs_hour >= 5  AND obs_hour < 10 THEN 'Pagi (05-10)'
+        WHEN obs_hour >= 10 AND obs_hour < 15 THEN 'Siang (10-15)'
+        WHEN obs_hour >= 15 AND obs_hour < 20 THEN 'Sore (15-20)'
+        ELSE 'Malam (20-05)'
+    END AS shift_name,
+    avg(avg_incident_count) AS avg_incident_per_hour,
+    avg(avg_anomaly_rate)   AS avg_anomaly_rate
+FROM mart.hour_of_week_city_summary
+GROUP BY 1;
+===== D:\Data science\sem5\ProjectAnbig-MetropoliaCity\sql\schemas\10_core_observations_stream.sql
+-- Tabel terpisah untuk output pipeline streaming, supaya tidak
+-- mencampuri core.observations (hasil batch yang sudah teraudit,
+-- 2.102.401 baris terkonfirmasi). Struktur disalin persis dari
+-- core.observations (kolom, tipe, index) lewat LIKE ... INCLUDING ALL,
+-- supaya tidak perlu menulis ulang DDL secara manual dan berisiko beda.
+CREATE TABLE IF NOT EXISTS core.observations_stream (
+    LIKE core.observations INCLUDING ALL
+);
