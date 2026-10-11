@@ -1,0 +1,23 @@
+﻿# data (large, never commit)
+data/raw/*
+!data/raw/.gitkeep
+data/parquet/
+data/run_stats/
+data/checkpoints/
+
+# secrets and local config
+.env
+
+# airflow / python
+airflow/logs/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+notebooks/road_gps_stability_output.csv
+
+data/models/
+data/checkpoints/
+data/*.log

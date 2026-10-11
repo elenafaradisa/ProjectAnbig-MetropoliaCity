@@ -1,0 +1,41 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap');
+
+html, body, [class*="st-"], .stMarkdown, button, input, textarea { font-family: 'Geist', sans-serif; }
+/* ...but keep Streamlit's icon font, or icons render as their names ("map", "air") */
+[data-testid="stIconMaterial"] { font-family: 'Material Symbols Rounded' !important; }
+.block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1400px; }
+h1 { font-weight: 600 !important; letter-spacing: -0.01em; font-size: 1.65rem !important; }
+h2, h3 { font-weight: 600 !important; letter-spacing: -0.005em; }
+
+/* sidebar: white, hairline border */
+[data-testid="stSidebar"] { background: #FFFFFF; border-right: 1px solid #E7E7E4; }
+
+/* cards: st.container(border=True, key="card_...") -- keyed containers get a
+   stable .st-key-<key> class, so this doesn't depend on Streamlit's internal test ids */
+[class*="st-key-card_"] {
+  background: #FFFFFF; border: 1px solid #E7E7E4 !important; border-radius: 12px !important; padding: 16px 18px;
+}
+
+/* KPI tiles */
+[data-testid="stMetric"] {
+  background: #FFFFFF; border: 1px solid #E7E7E4; border-radius: 12px; padding: 16px 20px;
+}
+[data-testid="stMetricLabel"] p { color: #5F5F5B; font-size: 13px; }
+[data-testid="stMetricValue"] { font-family: 'Geist Mono', monospace; font-weight: 500; font-size: 1.75rem; }
+
+/* small helpers used from st.markdown(..., unsafe_allow_html=True) */
+.mc-muted { color: #6E6E69; font-size: 12.5px; }
+.mc-mono  { font-family: 'Geist Mono', monospace; }
+.mc-crumb { color: #6E6E69; font-size: 13px; margin-bottom: -0.6rem; }
+.mc-incident {
+  border: 1px solid #F3C9C4; background: #FDF5F4; border-radius: 10px; padding: 12px 14px; margin: 4px 0 12px;
+}
+.mc-incident b { color: #8C1F19; }
+.mc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px;
+  background: #ECECE9; border: 1px solid #ECECE9; border-radius: 10px; overflow: hidden; margin-bottom: 12px; }
+.mc-grid > div { background: #FFFFFF; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.mc-grid span:first-child { font-size: 12px; color: #5F5F5B; }
+.mc-grid span:last-child  { font-family: 'Geist Mono', monospace; font-size: 17px; }
+
+/* map iframe: rounded like the cards */
+iframe[title="streamlit_folium.st_folium"] { border-radius: 10px; }
