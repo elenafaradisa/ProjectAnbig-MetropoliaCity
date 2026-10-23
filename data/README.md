@@ -6,7 +6,7 @@ the paths below. The paths must match exactly, because the DAGs and Spark jobs r
 | Data | Source | Location | Used by |
 |---|---|---|---|
 | traffictab23 | Kaggle | `data/raw/traffictab23.csv` | DAG `etl_traffic` |
-| Islamabad air pollution | Kaggle | ⚠️ FILL IN: pollution folder/file path (check `data/raw/` on a laptop where the pipeline already runs) | DAG `etl_pollution` |
+| Islamabad air pollution | Kaggle | `data/raw/pollution` | DAG `etl_pollution` |
 | Islamabad road geometry (OSM) | Overpass API | ⚠️ FILL IN: path of `islamabad_roads_overpass.json` | `geo/assign_osm_roads.py` |
 
 Generated automatically by the pipelines (**no download needed**): `data/parquet/`,
