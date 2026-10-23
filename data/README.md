@@ -58,10 +58,7 @@ re-audited by hand. The results are shown in the dashboard (Data Quality page).
 
 ## 2. Air pollution data (Islamabad)
 
-1. Download from Kaggle: https://www.kaggle.com/datasets/hajramohsin/pakistan-air-quality-pollutant-concentrations
-2. Place it at ⚠️ FILL IN: pollution folder/file path, keeping the original structure and file names
-   (the pipeline tells training and testing data apart by their source file names).
-3. Do not commit it.
+Air pollution data is already on the raw folder
 
 Summary (from the latest quality-check run):
 
