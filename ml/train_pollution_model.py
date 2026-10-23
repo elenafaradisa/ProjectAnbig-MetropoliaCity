@@ -21,6 +21,7 @@ those actuals on hand too.
 Usage:
     python -m ml.train_pollution_model
     python -m ml.train_pollution_model --model-dir /opt/project/data/models
+    docker compose exec airflow-scheduler bash -c "cd /opt/project && python -m ml.train_pollution_model"
 """
 import argparse
 import json
