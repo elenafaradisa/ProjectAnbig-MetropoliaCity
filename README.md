@@ -144,6 +144,7 @@ copy .env.example .env
 
 # 2. Letakkan dataset
 #    data\raw\traffictab23.csv
+#    data\raw\pollution
 
 # 3. Nyalakan semua service
 docker compose up -d --build
@@ -153,15 +154,32 @@ docker compose up -d --build
 job yang langsung menunggu data. Producer **tidak** ikut menyala karena hanya dijalankan saat demo.
 
 ```powershell
-# 4. Jalankan pipeline batch (sekali saja, butuh beberapa menit)
-docker compose exec airflow-scheduler airflow dags trigger etl_traffic
-docker compose exec airflow-scheduler airflow dags trigger etl_pollution
+# 4. Jalankan pipeline batch etl_traffic (sekali saja, butuh beberapa menit)
+docker compose exec airflow-scheduler airflow dags unpause etl_traffic; docker compose exec airflow-scheduler airflow dags trigger etl_traffic
 #    pantau progresnya di http://localhost:8080
 
-# 5. Petakan segmen jalan ke peta Islamabad (sekali saja)
+# 5. Jalankan model untuk etl_pollution
+#    lihat docstring di ml/train_pollution_model.py
+#    install python terlebih dahulu apabila belum terinstall
+winget install Python.Python.3.11 
+
+# 6. Jalankan pipeline batch etl_traffic (sekali saja, butuh beberapa menit)
+docker compose exec airflow-scheduler airflow dags unpause etl_pollution; docker compose exec airflow-scheduler airflow dags trigger etl_pollution
+#    pantau progresnya di http://localhost:8080
+
+# 7. Petakan segmen jalan ke peta Islamabad (sekali saja)
 #    lihat docstring di geo/assign_osm_roads.py
 
-# 6. Jalankan dashboard di host
+# 8. Run di ps
+Measure-Command { Get-Content .\sql\mart\build_road_hourly_stats.sql -Raw -Encoding UTF8 | docker compose exec -T postgres psql -U metropolia -d metropolia -v ON_ERROR_STOP=1 } 
+trs
+foreach ($s in "build_hour_of_week_baseline","build_hour_of_week_city_summary","build_road_window_stats") {
+    Write-Host "== $s" -ForegroundColor Cyan
+    Get-Content ".\sql\mart\$s.sql" -Raw -Encoding UTF8 | docker compose exec -T postgres psql -U metropolia -d metropolia -v ON_ERROR_STOP=1
+    if ($LASTEXITCODE -ne 0) { Write-Host "Gagal pada $s" -ForegroundColor Red; break }
+}
+
+# 9. Jalankan dashboard di host
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements-dashboard.txt
