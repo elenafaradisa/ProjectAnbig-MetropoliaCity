@@ -158,7 +158,7 @@ job yang langsung menunggu data. Producer **tidak** ikut menyala karena hanya di
 docker compose exec airflow-scheduler airflow dags unpause etl_traffic; docker compose exec airflow-scheduler airflow dags trigger etl_traffic
 #    pantau progresnya di http://localhost:8080
 
-# 5. Jalankan pipeline batch etl_traffic (sekali saja, butuh beberapa menit)
+# 5. Jalankan pipeline batch etl_pollution (sekali saja, butuh beberapa menit)
 docker compose exec airflow-scheduler airflow dags unpause etl_pollution; docker compose exec airflow-scheduler airflow dags trigger etl_pollution
 #    pantau progresnya di http://localhost:8080
 
