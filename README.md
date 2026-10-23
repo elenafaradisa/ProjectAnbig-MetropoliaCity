@@ -172,7 +172,7 @@ docker compose exec airflow-scheduler airflow dags unpause etl_pollution; docker
 
 # 8. Run di ps
 Measure-Command { Get-Content .\sql\mart\build_road_hourly_stats.sql -Raw -Encoding UTF8 | docker compose exec -T postgres psql -U metropolia -d metropolia -v ON_ERROR_STOP=1 } 
-trs
+
 foreach ($s in "build_hour_of_week_baseline","build_hour_of_week_city_summary","build_road_window_stats") {
     Write-Host "== $s" -ForegroundColor Cyan
     Get-Content ".\sql\mart\$s.sql" -Raw -Encoding UTF8 | docker compose exec -T postgres psql -U metropolia -d metropolia -v ON_ERROR_STOP=1
