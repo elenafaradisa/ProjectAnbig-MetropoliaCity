@@ -144,7 +144,6 @@ copy .env.example .env
 
 # 2. Letakkan dataset
 #    data\raw\traffictab23.csv
-#    data\raw\pollution
 
 # 3. Nyalakan semua service
 docker compose up -d --build
